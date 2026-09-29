@@ -2,3 +2,6 @@
 
 # MATLAB backup files
 *.asv
+
+# Local build output
+/bin/

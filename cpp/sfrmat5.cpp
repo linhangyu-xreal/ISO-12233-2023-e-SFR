@@ -799,6 +799,7 @@ SfrResult<double> compute_sfr_double(const Image<double>& input, double del, int
     result.sfr50 = sfr50;
     const std::vector<double> freq30 = findfreq(dat, 0.3, dat.rows(), 0);
     result.sfr30 = freq30.empty() ? 0.0 : freq30[0];
+    result.edge_angle_degrees = std::atan(slope_ref) * (180.0 / M_PI);
     result.fitme = fitout;
     result.esf = esf_last;
     result.nbin = nbin;
@@ -861,6 +862,7 @@ template <typename T> SfrResult<T> cast_result(const SfrResult<double>& input) {
     out.e = cast_matrix<T>(input.e);
     out.sfr50 = static_cast<T>(input.sfr50);
     out.sfr30 = static_cast<T>(input.sfr30);
+    out.edge_angle_degrees = static_cast<T>(input.edge_angle_degrees);
     out.fitme = cast_matrix<T>(input.fitme);
     out.esf = cast_vector<T>(input.esf);
     out.nbin = input.nbin;

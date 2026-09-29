@@ -5,7 +5,11 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -199,7 +203,7 @@ double parse_double(const std::string& value, const char* name) {
 
 void print_result(const sfrmat5::SfrResult<Scalar>& result, bool print_sfr_rows) {
     std::cout << "SFR50: " << result.sfr50 << "\n";
-    std::cout << "MTF30: " << result.sfr30 << "\n";
+    std::cout << "SFR30: " << result.sfr30 << "\n";
     if (result.e.rows() > 0 && result.e.cols() > 0) {
         std::cout << "Sampling efficiency (10%): ";
         for (int c = 0; c < result.e.cols(); ++c) {
@@ -222,6 +226,167 @@ void print_result(const sfrmat5::SfrResult<Scalar>& result, bool print_sfr_rows)
             std::cout << result.dat(row, col);
         }
         std::cout << "\n";
+    }
+}
+
+std::string quoted_string(const std::string& value) {
+    std::ostringstream output;
+    output << '"';
+    for (unsigned char ch : value) {
+        switch (ch) {
+        case '"': output << "\\\""; break;
+        case '\\': output << "\\\\"; break;
+        case '\b': output << "\\b"; break;
+        case '\f': output << "\\f"; break;
+        case '\n': output << "\\n"; break;
+        case '\r': output << "\\r"; break;
+        case '\t': output << "\\t"; break;
+        default:
+            if (ch < 0x20) {
+                output << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+                       << static_cast<int>(ch) << std::dec << std::setfill(' ');
+            } else {
+                output << static_cast<char>(ch);
+            }
+        }
+    }
+    output << '"';
+    return output.str();
+}
+
+std::string lowercase_extension(const std::string& path) {
+    const size_t dot = path.find_last_of('.');
+    std::string extension = (dot == std::string::npos) ? "" : path.substr(dot);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return extension;
+}
+
+void write_json_matrix(std::ostream& output, const sfrmat5::Matrix<Scalar>& matrix,
+                       const std::string& indent) {
+    output << "[\n";
+    for (int row = 0; row < matrix.rows(); ++row) {
+        output << indent << "  [";
+        for (int col = 0; col < matrix.cols(); ++col) {
+            if (col != 0) output << ", ";
+            output << matrix(row, col);
+        }
+        output << "]" << (row + 1 == matrix.rows() ? "\n" : ",\n");
+    }
+    output << indent << "]";
+}
+
+void write_yaml_matrix(std::ostream& output, const sfrmat5::Matrix<Scalar>& matrix,
+                       const std::string& indent) {
+    if (matrix.rows() == 0) {
+        output << " []\n";
+        return;
+    }
+    output << "\n";
+    for (int row = 0; row < matrix.rows(); ++row) {
+        output << indent << "- [";
+        for (int col = 0; col < matrix.cols(); ++col) {
+            if (col != 0) output << ", ";
+            output << matrix(row, col);
+        }
+        output << "]\n";
+    }
+}
+
+std::vector<std::string> sfr_column_names(int channels) {
+    if (channels == 1) return {"frequency", "gray"};
+    if (channels == 3) return {"frequency", "red", "green", "blue", "luminance"};
+    std::vector<std::string> names = {"frequency"};
+    for (int channel = 0; channel < channels; ++channel) {
+        names.push_back("channel_" + std::to_string(channel + 1));
+    }
+    return names;
+}
+
+void write_result_file(const std::string& output_path, const std::string& image_path,
+                       int source_width, int source_height, int roi_width, int roi_height,
+                       int channels, const std::array<int, 4>& roi, int npol, double del,
+                       sfrmat5::WindowFlag window, const sfrmat5::SfrResult<Scalar>& result) {
+    const std::string extension = lowercase_extension(output_path);
+    if (extension != ".json" && extension != ".yaml" && extension != ".yml") {
+        throw std::invalid_argument("Output file must use .json, .yaml, or .yml extension");
+    }
+    std::ofstream output(output_path);
+    if (!output) {
+        throw std::runtime_error("Failed to open output file: " + output_path);
+    }
+    output << std::setprecision(std::numeric_limits<Scalar>::max_digits10);
+    const std::string window_name =
+        window == sfrmat5::WindowFlag::Tukey ? "tukey" : "hamming";
+    const std::vector<std::string> columns = sfr_column_names(channels);
+    const std::string absolute_image_path =
+        std::filesystem::absolute(image_path).lexically_normal().string();
+
+    if (extension == ".json") {
+        output << "{\n"
+               << "  \"image\": " << quoted_string(absolute_image_path) << ",\n"
+               << "  \"source_size\": {\"width\": " << source_width
+               << ", \"height\": " << source_height << "},\n"
+               << "  \"roi\": {\"x1\": " << roi[0] << ", \"y1\": " << roi[1]
+               << ", \"x2\": " << roi[2] << ", \"y2\": " << roi[3]
+               << ", \"width\": " << roi_width << ", \"height\": " << roi_height << "},\n"
+               << "  \"channels\": " << channels << ",\n"
+               << "  \"parameters\": {\"npol\": " << npol << ", \"del\": " << del
+               << ", \"window\": " << quoted_string(window_name) << "},\n"
+               << "  \"results\": {\n"
+               << "    \"status\": " << result.status << ",\n"
+               << "    \"sfr50\": " << result.sfr50 << ",\n"
+               << "    \"sfr30\": " << result.sfr30 << ",\n"
+               << "    \"edge_angle_degrees\": " << result.edge_angle_degrees << ",\n"
+               << "    \"nbin\": " << result.nbin << ",\n"
+               << "    \"del2\": " << result.del2 << ",\n"
+               << "    \"sfr_columns\": [";
+        for (size_t index = 0; index < columns.size(); ++index) {
+            if (index != 0) output << ", ";
+            output << quoted_string(columns[index]);
+        }
+        output << "],\n    \"sampling_efficiency\": ";
+        write_json_matrix(output, result.e, "    ");
+        output << ",\n    \"fit_coefficients\": ";
+        write_json_matrix(output, result.fitme, "    ");
+        output << ",\n    \"esf\": [";
+        for (size_t index = 0; index < result.esf.size(); ++index) {
+            if (index != 0) output << ", ";
+            output << result.esf[index];
+        }
+        output << "],\n    \"sfr_data\": ";
+        write_json_matrix(output, result.dat, "    ");
+        output << "\n  }\n}\n";
+    } else {
+        output << "image: " << quoted_string(absolute_image_path) << "\n"
+               << "source_size:\n  width: " << source_width << "\n  height: " << source_height
+               << "\nroi:\n  x1: " << roi[0] << "\n  y1: " << roi[1] << "\n  x2: " << roi[2]
+               << "\n  y2: " << roi[3] << "\n  width: " << roi_width << "\n  height: " << roi_height
+               << "\nchannels: " << channels << "\nparameters:\n  npol: " << npol
+               << "\n  del: " << del << "\n  window: " << quoted_string(window_name)
+               << "\nresults:\n  status: " << result.status << "\n  sfr50: " << result.sfr50
+               << "\n  sfr30: " << result.sfr30
+               << "\n  edge_angle_degrees: " << result.edge_angle_degrees
+               << "\n  nbin: " << result.nbin
+               << "\n  del2: " << result.del2 << "\n  sfr_columns: [";
+        for (size_t index = 0; index < columns.size(); ++index) {
+            if (index != 0) output << ", ";
+            output << quoted_string(columns[index]);
+        }
+        output << "]\n  sampling_efficiency:";
+        write_yaml_matrix(output, result.e, "    ");
+        output << "  fit_coefficients:";
+        write_yaml_matrix(output, result.fitme, "    ");
+        output << "  esf: [";
+        for (size_t index = 0; index < result.esf.size(); ++index) {
+            if (index != 0) output << ", ";
+            output << result.esf[index];
+        }
+        output << "]\n  sfr_data:";
+        write_yaml_matrix(output, result.dat, "    ");
+    }
+    if (!output) {
+        throw std::runtime_error("Failed to write output file: " + output_path);
     }
 }
 
@@ -285,7 +450,8 @@ std::array<int, 4> select_roi(const Image& image) {
 }
 
 int compute_file(const std::string& path, const std::array<int, 4>* roi, int npol, double del,
-                 sfrmat5::WindowFlag window, bool mouse_roi = false) {
+                 sfrmat5::WindowFlag window, bool mouse_roi = false,
+                 const std::string& output_path = "") {
     if (npol < 1 || npol > 5) {
         throw std::invalid_argument("npol must be between 1 and 5");
     }
@@ -294,6 +460,8 @@ int compute_file(const std::string& path, const std::array<int, 4>* roi, int npo
     }
 
     Image image = load_image(path);
+    const int source_width = image.cols;
+    const int source_height = image.rows;
     std::array<int, 4> selected{};
     if (mouse_roi) {
         selected = select_roi(image);
@@ -304,6 +472,8 @@ int compute_file(const std::string& path, const std::array<int, 4>* roi, int npo
         std::cout << "ROI: " << (*roi)[0] << " " << (*roi)[1] << " " << (*roi)[2]
                   << " " << (*roi)[3] << "\n";
     }
+    const std::array<int, 4> effective_roi =
+        roi != nullptr ? *roi : std::array<int, 4>{1, 1, source_width, source_height};
     if (image.cols < 4 || image.rows < 4)
         throw std::invalid_argument("ROI must be at least 4 x 4 pixels");
     auto pixels = std::make_unique<std::vector<Scalar>>(extract_planar_pixels(image));
@@ -326,6 +496,11 @@ int compute_file(const std::string& path, const std::array<int, 4>* roi, int npo
               << "Window: "
               << (window == sfrmat5::WindowFlag::Tukey ? "Tukey" : "Hamming") << "\n";
     print_result(result, false);
+    if (!output_path.empty()) {
+        write_result_file(output_path, path, source_width, source_height, image.cols, image.rows,
+                          image.channels, effective_roi, npol, del, window, result);
+        std::cout << "Output: " << output_path << "\n";
+    }
     return 0;
 }
 
@@ -383,8 +558,10 @@ int run_selftest() {
             break;
         }
     }
-    numerical_ok &= crossed30 && check_value("MTF30", result.sfr30, expected30, 1e-12);
+    numerical_ok &= crossed30 && check_value("SFR30", result.sfr30, expected30, 1e-12);
     numerical_ok &= check_value("SFR50", result.sfr50, 0.269805, value_tol);
+    numerical_ok &=
+        check_value("edge angle", result.edge_angle_degrees, -5.48564, value_tol);
     numerical_ok &= check_value("del2", result.del2, 0.248855, value_tol);
 
     numerical_ok &= check_matrix_value("sampling efficiency 10% R", result.e, 0, 0, 85.0, 0.0);
@@ -410,8 +587,8 @@ int run_selftest() {
         return 1;
     }
 
-    std::cout << "sfrmat5 basic test passed\n";
-    print_result(result, true);
+    std::cout << "sfrcpp5 basic test passed\n";
+    // print_result(result, true);
     return 0;
 }
 
@@ -420,53 +597,69 @@ void print_usage(const char* program) {
               << "  " << program << "\n"
               << "  " << program << " --selftest\n"
               << "  " << program << " --interactive [tukey|hamming]\n"
-              << "  " << program << " image\n"
-              << "  " << program << " image --roi [npol [del [tukey|hamming]]]\n"
-              << "  " << program << " image --full [npol [del [tukey|hamming]]]\n"
+              << "  " << program << " image [-o output.json|output.yaml]\n"
+              << "  " << program << " image --roi [npol [del [tukey|hamming]]] [-o output.json|output.yaml]\n"
+              << "  " << program << " image --full [npol [del [tukey|hamming]]] [-o output.json|output.yaml]\n"
               << "  " << program
-              << " image x1 y1 x2 y2 [npol [del [tukey|hamming]]]\n"
+              << " image x1 y1 x2 y2 [npol [del [tukey|hamming]]] [-o output.json|output.yaml]\n"
               << "ROI coordinates are 1-based and inclusive.\n";
 }
 
 int run_file(int argc, char** argv) {
     const std::string path = argv[1];
+    std::vector<std::string> arguments;
+    std::string output_path;
+    for (int index = 2; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "-o" || argument == "--output") {
+            if (!output_path.empty()) {
+                throw std::invalid_argument("output option may only be specified once");
+            }
+            if (index + 1 >= argc) {
+                throw std::invalid_argument("-o requires an output file path");
+            }
+            output_path = argv[++index];
+        } else {
+            arguments.push_back(argument);
+        }
+    }
     std::array<int, 4> roi{};
     const std::array<int, 4>* roi_ptr = nullptr;
     int npol = 5;
     double del = 1.0;
     sfrmat5::WindowFlag window = sfrmat5::WindowFlag::Tukey;
-    int option = 2;
+    size_t option = 0;
     bool mouse_roi = false;
 
-    if (argc > option && std::string(argv[option]) == "--roi") {
+    if (arguments.size() > option && arguments[option] == "--roi") {
         mouse_roi = true;
         ++option;
-    } else if (argc > option && std::string(argv[option]) == "--full") {
+    } else if (arguments.size() > option && arguments[option] == "--full") {
         ++option;
-    } else if (argc > option) {
-        if (argc - option < 4) {
+    } else if (arguments.size() > option) {
+        if (arguments.size() - option < 4) {
             throw std::invalid_argument("ROI requires four coordinates: x1 y1 x2 y2");
         }
         for (int index = 0; index < 4; ++index) {
-            roi[index] = parse_int(argv[option + index], "ROI coordinate");
+            roi[index] = parse_int(arguments[option + index], "ROI coordinate");
         }
         roi_ptr = &roi;
         option += 4;
     }
 
-    if (argc > option) {
-        npol = parse_int(argv[option++], "npol");
+    if (arguments.size() > option) {
+        npol = parse_int(arguments[option++], "npol");
     }
-    if (argc > option) {
-        del = parse_double(argv[option++], "sampling interval");
+    if (arguments.size() > option) {
+        del = parse_double(arguments[option++], "sampling interval");
     }
-    if (argc > option && !parse_window(argv[option++], window)) {
+    if (arguments.size() > option && !parse_window(arguments[option++], window)) {
         throw std::invalid_argument("window must be tukey or hamming");
     }
-    if (argc > option) {
+    if (arguments.size() > option) {
         throw std::invalid_argument("too many arguments");
     }
-    return compute_file(path, roi_ptr, npol, del, window, mouse_roi);
+    return compute_file(path, roi_ptr, npol, del, window, mouse_roi, output_path);
 }
 
 int run_interactive(int argc, char** argv) {

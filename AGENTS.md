@@ -24,6 +24,8 @@ and executes the test against:
 
 - `Example_Images/Test_edge1.bmp`
 
+The executable is written to `bin/test_sfrmat5`.
+
 The test prints SFR50, sampling efficiency, and the first rows of SFR data.
 
 ## Notes

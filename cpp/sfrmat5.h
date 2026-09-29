@@ -21,6 +21,7 @@ template <typename T> struct SfrResult {
     Matrix<T> e;                         // sampling efficiency (nval x ncol).
     T sfr50 = static_cast<T>(0);         // frequency where SFR = 50%.
     T sfr30 = static_cast<T>(0);         // frequency where SFR = 30%, same channel as sfr50.
+    T edge_angle_degrees = static_cast<T>(0); // Signed angle from vertical after orientation normalization.
     Matrix<T> fitme;                     // polynomial coefficients (+ misregistration if present).
     std::vector<T> esf;                  // last computed supersampled edge profile.
     int nbin = 4;                        // binning factor used.
